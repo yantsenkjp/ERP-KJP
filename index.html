@@ -310,16 +310,30 @@ tr:hover td{background:#fafafa}
         <div class="card-title">🛒 Form Purchase Requisition</div>
         <div class="form-grid mb-12">
           <div class="fg"><label>Tanggal</label><input type="date" id="pr-tanggal"></div>
-          <div class="fg"><label>Requester</label><input type="text" id="pr-requester"></div>
+          <div class="fg"><label>Requester</label><input type="text" id="pr-requester" placeholder="Nama Peminta"></div>
           <div class="fg"><label>Proyek</label><select id="pr-proyek-sel"></select></div>
-          <div class="fg"><label>PR No</label><input type="text" id="pr-no" readonly></div>
+          <div class="fg"><label>PIC Purchasing</label><input type="text" id="pr-pic" placeholder="Nama PIC"></div>
+          <div class="fg full"><label>PR No</label><input type="text" id="pr-no" readonly></div>
         </div>
         <div class="table-wrap">
           <table id="pr-item-table">
-            <thead><tr><th width="5%">No</th><th>Deskripsi Item</th><th width="15%">Unit</th><th width="15%">Qty</th></tr></thead>
+            <thead>
+              <tr>
+                <th width="5%">No</th>
+                <th width="12%">Code Budget</th>
+                <th>Deskripsi Item</th>
+                <th width="8%">Unit</th>
+                <th width="8%">Qty</th>
+                <th width="12%">Price/Unit</th>
+                <th width="15%">Total</th>
+                <th width="15%">Remark</th>
+              </tr>
+            </thead>
             <tbody id="pr-item-body"></tbody>
           </table>
         </div>
+        <button class="btn btn-outline mt-16" style="width:100%; justify-content:center;" onclick="tambahBarisPR()">➕ Tambah Baris Barang</button>
+      </div>
       </div>
       <div class="card" id="card-pr-list">
         <div class="card-title">📋 Riwayat Purchase Requisition</div>
@@ -430,7 +444,7 @@ var LS_USER = 'kjp_logged_user';
 var GS_URL = '';
 var CURRENT_USER = null;
 
-var DB = { proyek:[], mandor:[], pekerja:[], sm:[], absensi:[] };
+var DB = { proyek:[], mandor:[], pekerja:[], sm:[], absensi:[], pr:[] };
 var editIds = { pekerja:'', mandor:'', sm:'', proyek:'' };
 
 var ROLE_PERMISSIONS = {
@@ -734,7 +748,9 @@ function loadAll(cb) {
   apiGet({action:'get_all'}, function(res) {
     if (!res || !res.ok) { setBadge('err'); if(cb) cb(false); return; }
     DB.proyek  = res.data.proyek || []; DB.mandor  = res.data.mandor || []; DB.pekerja = res.data.pekerja || []; 
-    DB.sm      = res.data.sm || []; DB.absensi = res.data.absensi || []; setBadge('ok'); refreshAllDropdowns(); if(cb) cb(true);
+    DB.sm      = res.data.sm || []; DB.absensi = res.data.absensi || []; 
+    DB.pr      = res.data.pr || []; // <--- Wadah untuk menampung data PR
+    setBadge('ok'); refreshAllDropdowns(); if(cb) cb(true);
   });
 }
 
@@ -1242,14 +1258,123 @@ function initPR() {
   refreshAllDropdowns();
   document.getElementById('pr-tanggal').value = new Date().toISOString().split('T')[0];
   document.getElementById('pr-no').value = 'PR-' + Math.floor(1000 + Math.random() * 9000);
-  var tbody = document.getElementById('pr-item-body'); tbody.innerHTML = '';
-  for(var i=0; i<3; i++) {
-    tbody.insertAdjacentHTML('beforeend', '<tr><td class="pr-td-num">'+(i+1)+'</td><td><input type="text" class="pr-desc" placeholder="Item barang"></td><td><input type="text" class="pr-unit" placeholder="Unit"></td><td><input type="number" class="pr-qty" value="0"></td></tr>');
-  }
-  document.getElementById('list-pr').innerHTML = '<div class="empty-state" style="text-align:center;padding:20px;color:#888;">Belum ada riwayat berkas digital PR logistik.</div>';
+  document.getElementById('pr-requester').value = CURRENT_USER ? CURRENT_USER.nama : '';
+  document.getElementById('pr-pic').value = '';
+  document.getElementById('pr-item-body').innerHTML = '';
+  
+  tambahBarisPR(); // Munculkan 1 baris awal
+  renderPRList();  // Tampilkan riwayat PR di bawahnya
 }
+
 function prBuatBaru() { initPR(); }
-function prSimpan() { showAlert('alert-pr', 'success', 'Dokumen Purchase Requisition berhasil diamankan secara lokal.'); }
+
+function tambahBarisPR() {
+  var tbody = document.getElementById('pr-item-body');
+  var rows = tbody.getElementsByTagName('tr').length;
+  var no = rows + 1;
+  var html = '<tr>' +
+    '<td class="pr-td-num">'+no+'</td>' +
+    '<td><input type="text" class="pr-code" placeholder="Budget"></td>' +
+    '<td><input type="text" class="pr-desc" placeholder="Nama Barang"></td>' +
+    '<td><input type="text" class="pr-unit" placeholder="Pcs"></td>' +
+    '<td><input type="number" class="pr-qty" value="0" min="0" oninput="hitungTotalPR(this)"></td>' +
+    '<td><input type="number" class="pr-price" value="0" min="0" oninput="hitungTotalPR(this)"></td>' +
+    '<td><input type="number" class="pr-total" value="0" readonly style="background:#f5f5f5; font-weight:bold;"></td>' +
+    '<td><input type="text" class="pr-remark" placeholder="..."></td>' +
+    '</tr>';
+  tbody.insertAdjacentHTML('beforeend', html);
+}
+
+function hitungTotalPR(el) {
+  var tr = el.closest('tr');
+  var qty = Number(tr.querySelector('.pr-qty').value) || 0;
+  var price = Number(tr.querySelector('.pr-price').value) || 0;
+  tr.querySelector('.pr-total').value = qty * price;
+}
+
+function prSimpan() {
+  var tgl = document.getElementById('pr-tanggal').value;
+  var req = document.getElementById('pr-requester').value;
+  var proy = document.getElementById('pr-proyek-sel').value;
+  var pic = document.getElementById('pr-pic').value;
+  var noPR = document.getElementById('pr-no').value;
+
+  if(!proy || !req) { showAlert('alert-pr', 'error', 'Pilih Proyek dan isi Requester terlebih dahulu!'); return; }
+
+  var tbody = document.getElementById('pr-item-body');
+  var trs = tbody.getElementsByTagName('tr');
+  var itemsToSave = [];
+
+  // Looping mengambil data setiap baris barang
+  for(var i=0; i<trs.length; i++) {
+    var tr = trs[i];
+    var desc = tr.querySelector('.pr-desc').value.trim();
+    var qty = Number(tr.querySelector('.pr-qty').value) || 0;
+    
+    // Hanya simpan baris yang diisi nama barang & Qty
+    if(desc && qty > 0) {
+      itemsToSave.push({
+        id: uid(), waktu: tgl, noPR: noPR, proyekId: proy, requester: req, picPurchasing: pic,
+        codeBudget: tr.querySelector('.pr-code').value, description: desc, unit: tr.querySelector('.pr-unit').value,
+        qty: qty, price: tr.querySelector('.pr-price').value, total: tr.querySelector('.pr-total').value, remark: tr.querySelector('.pr-remark').value
+      });
+    }
+  }
+
+  if(itemsToSave.length === 0) { showAlert('alert-pr', 'error', 'Isi minimal 1 barang dengan QTY lebih dari 0.'); return; }
+
+  // Proses simpan ke Backend secara berurutan
+  var count = 0;
+  itemsToSave.forEach(function(row) {
+    apiPost({action: 'post_pr', row: row}, function(res) {
+      count++;
+      if(count === itemsToSave.length) {
+        DB.pr = DB.pr.concat(itemsToSave); // Masukkan ke data lokal agar riwayat terupdate
+        showAlert('alert-pr', 'success', 'Dokumen Purchase Requisition berhasil disimpan ke Cloud!');
+        initPR(); // Bersihkan form
+      }
+    });
+  });
+}
+
+function renderPRList() {
+  var el = document.getElementById('list-pr');
+  if(!DB.pr || DB.pr.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="text-align:center;padding:20px;color:#888;">Belum ada riwayat Purchase Requisition.</div>';
+    return;
+  }
+
+  // Mengelompokkan riwayat barang berdasarkan Nomor PR
+  var grouped = {};
+  DB.pr.forEach(function(item) {
+    if(!grouped[item.noPR]) grouped[item.noPR] = [];
+    grouped[item.noPR].push(item);
+  });
+
+  var html = '';
+  // Menampilkan dari yang terbaru
+  Object.keys(grouped).reverse().forEach(function(no) {
+    var items = grouped[no];
+    var first = items[0];
+    var prName = DB.proyek.find(function(x){return x.id === first.proyekId;});
+    prName = prName ? prName.nama : '-';
+    var totalAll = items.reduce(function(sum, i) { return sum + Number(i.total); }, 0);
+
+    html += '<div style="border:1px solid #e0e0e0; border-radius:8px; padding:12px; margin-bottom:12px; background:#fff;">';
+    html += '<div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:8px;">';
+    html += '<div><strong style="color:#C8102E;">' + no + '</strong><br><span style="font-size:11px; color:#666;">📅 ' + fmtTgl(first.waktu) + ' | 📍 ' + prName + '</span></div>';
+    html += '<div style="text-align:right;"><strong>' + rupiah(totalAll) + '</strong><br><span style="font-size:11px; color:#666;">Req: ' + first.requester + '</span></div>';
+    html += '</div>';
+
+    html += '<table style="width:100%; font-size:11px; border-collapse:collapse;">';
+    html += '<tr style="background:#f9f9f9; text-align:left;"><th>Deskripsi</th><th>Qty</th><th>Total</th></tr>';
+    items.forEach(function(i) {
+      html += '<tr><td style="padding:4px 0;">' + i.description + '</td><td>' + i.qty + ' ' + i.unit + '</td><td>' + rupiah(i.total) + '</td></tr>';
+    });
+    html += '</table></div>';
+  });
+  el.innerHTML = html;
+}
 
 function renderPekerja() {
   var el = document.getElementById('list-pekerja'); 
